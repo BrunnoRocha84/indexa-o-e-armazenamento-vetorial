@@ -1,0 +1,951 @@
+{
+  "name": "agente de Operações - RAG - Prod",
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -304,
+        -208
+      ],
+      "id": "5b3afa8f-0170-4aff-9b97-0a5f383c3cc4",
+      "name": "When clicking ‘Execute workflow’"
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first().json;\nconst foldersToProcess = [{\n  id: item.root_folder_id,\n  name: item.root_folder_name,\n  level: item.level,\n  path: item.root_folder_name,\n}];\n\nreturn [{\n  json: {\n    folders_to_process: foldersToProcess,\n    max_depth: item.max_depth,\n    current_batch: 0,\n    batch_size: item.batch_size,\n  }\n}];"
+      },
+      "id": "13da03c1-d0f1-4929-88ec-2a54c25307ef",
+      "name": "Set execution data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        144,
+        -144
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst execution_data = $(\"Is there any folder to process?\").last().json;\nconst allDiscoveredFiles = [];\nconst newFoldersToProcess = [];\nlet remainingFolders = [];\nlet maxDepth = execution_data.max_depth;\nlet currentBatch = execution_data.current_batch;\nlet batchSize = execution_data.batch_size;\n\nfor (let i = 0; i < items.length; i++) {\n  const batchData = $('Set folders to process').all()[i].json;\n  const apiResponse = items[i].json;\n  \n  maxDepth = batchData.max_depth;\n  currentBatch = batchData.current_batch;\n  remainingFolders = batchData.remaining_folders || [];\n  \n  const files = apiResponse.files || [];\n  const currentFolder = {\n    id: batchData.id,\n    name: batchData.name,\n    path: batchData.path,\n    level: batchData.level\n  };\n  \n  const folders = files.filter(f => f.mimeType === 'application/vnd.google-apps.folder');\n  const onlyFiles = files.filter(f => f.mimeType !== 'application/vnd.google-apps.folder');\n  \n  onlyFiles.forEach(file => {\n    allDiscoveredFiles.push({\n      id: file.id,\n      name: file.name,\n      mime_type: file.mimeType,\n      url: file.webViewLink,\n      created_at: file.createdTime,\n      updated_at: file.modifiedTime,\n      size: file.size,\n      folder: {\n        id: currentFolder.id,\n        name: currentFolder.name,\n        path: currentFolder.path,\n        level: currentFolder.level,\n      },\n    });\n  });\n  \n  if (currentFolder.level < maxDepth) {\n    folders.forEach(folder => {\n      newFoldersToProcess.push({\n        id: folder.id,\n        name: folder.name,\n        level: currentFolder.level + 1,\n        path: `${currentFolder.path}/${folder.name}`\n      });\n    });\n  }\n}\n\nconst totalFoldersToProcess = [...newFoldersToProcess, ...remainingFolders];\n\nreturn [{\n  json: {\n    discovered_files: allDiscoveredFiles,\n    folders_to_process: totalFoldersToProcess,\n    max_depth: maxDepth,\n    current_batch: currentBatch + 1,\n    batch_size: batchSize,\n  }\n}];"
+      },
+      "id": "015bee5f-e196-44fa-9c27-35c7fa0611e2",
+      "name": "Process result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1040,
+        -352
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{\n  json: $('Process result').first().json,\n}];"
+      },
+      "id": "f355e240-34ac-4a9d-bb35-2a6cb781ff9e",
+      "name": "Prepare next iteration data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1712,
+        -256
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const processedData = $('Merge process results').last().json.results;\nconst uniqueFiles = [];\nconst seenIds = new Set();\n\nprocessedData.forEach((item) => {\n  if (item.discovered_files && item.discovered_files.length > 0) {\n    item.discovered_files.forEach((file) => {\n      if (! seenIds.has(file.id)) {\n        seenIds.add(file.id);\n        uniqueFiles.push(file);\n      }\n    });\n  }\n});\n\nif (uniqueFiles.length === 0) {\n  return [];\n}\n\nreturn uniqueFiles.map(file => ({ json: file }));"
+      },
+      "id": "63d27fce-d435-4549-abfd-73d4a53c09fa",
+      "name": "Consolidate files",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1712,
+        -48
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "has-folders",
+              "leftValue": "={{ $json.folders_to_process.length }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "0cd84d42-7fb4-4ff9-b220-6a278fa60a9e",
+      "name": "Is there any folder to process?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        368,
+        -144
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first().json;\nconst foldersToProcess = item.folders_to_process || [];\nconst batchSize = item.batch_size;\nconst currentBatch = item.current_batch || 0;\n\nconst startIndex = 0;\nconst endIndex = Math.min(batchSize, foldersToProcess.length);\nconst currentBatchFolders = foldersToProcess.slice(startIndex, endIndex);\n\nreturn currentBatchFolders.map(folder => ({\n  json: {\n    id: folder.id,\n    name: folder.name,\n    path: folder.path,\n    level: folder.level,\n    max_depth: item.max_depth,\n    remaining_folders: foldersToProcess.slice(endIndex),\n    current_batch: currentBatch,\n  }\n}));"
+      },
+      "id": "476d74d6-a0aa-48d6-af09-c4ec7a0a9da8",
+      "name": "Set folders to process",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        592,
+        -352
+      ]
+    },
+    {
+      "parameters": {
+        "url": "=https://www.googleapis.com/drive/v3/files",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleDriveOAuth2Api",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "q",
+              "value": "='{{ $json.id }}' in parents and trashed=false"
+            },
+            {
+              "name": "fields",
+              "value": "files(id,name,mimeType,createdTime,modifiedTime,parents,webViewLink,size)"
+            },
+            {
+              "name": "pageSize",
+              "value": "1000"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "286e9f74-43b3-429d-b922-a89694616d36",
+      "name": "List folder",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        816,
+        -352
+      ],
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 2000,
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "8q8VuCwcbTXRJ8px",
+          "name": "Google Drive - Bento"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "more-folders",
+              "leftValue": "={{ $('Process result').last().json.folders_to_process.length > 0 }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "4333af04-7fc3-4900-85d1-f82b801fb635",
+      "name": "Has more folders to process?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1488,
+        -352
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "let lastResult = $('Process result').last().json;\nlet results = [];\n\ntry {\n  results = $('Merge process results').first().json.results;\n} catch (e) {}\n\nif (lastResult) {\n  results.push(lastResult);\n}\n\nreturn [{\n  results,\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1264,
+        -352
+      ],
+      "id": "172aba60-c500-4173-8093-898eec68f542",
+      "name": "Merge process results"
+    },
+    {
+      "parameters": {
+        "mode": "raw",
+        "jsonOutput": "{\n  \"root_folder_id\": \"1blng6cIexKhqTkDzEPE-k_9t7jvquhPb\",\n  \"root_folder_name\": \"POPs/Operações\",\n  \"level\": 0,\n  \"max_depth\": 15,\n  \"batch_size\": 5,\n  \"files_blacklist\": [\"Lista mestra\", \"ACESSOS\"],\n  \"folders_blacklist\": [\"VIPs\"],\n  \"allowed_mimetypes\": [\n    \"application/vnd.google-apps.document\"\n  ]\n}",
+        "options": {}
+      },
+      "id": "bb1ef94a-eef8-46d1-b3af-9ff8f861630a",
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -80,
+        -144
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT\n  *\nFROM documents\nWHERE\n  metadata->>'agent' = 'empresanho_operacoes'\n  AND metadata->>'id' = '{{ $json.id }}'",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        2832,
+        -112
+      ],
+      "id": "75a19546-d378-4f76-a1bc-61e5ffd28519",
+      "name": "Find embedding",
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "aMXHBDGI2LrfF2Sb",
+          "name": "Supabase - Prod"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "2e9f8372-73d5-4c2a-866d-e7463d48be20",
+              "leftValue": "={{ $json }}",
+              "rightValue": "",
+              "operator": {
+                "type": "object",
+                "operation": "empty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        3056,
+        -112
+      ],
+      "id": "645503e4-0d1f-4b98-a92b-412818a2ab34",
+      "name": "New data?"
+    },
+    {
+      "parameters": {
+        "mode": "insert",
+        "tableName": {
+          "__rl": true,
+          "value": "documents",
+          "mode": "list",
+          "cachedResultName": "documents"
+        },
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.vectorStoreSupabase",
+      "typeVersion": 1.3,
+      "position": [
+        4400,
+        16
+      ],
+      "id": "e96fed98-270b-4ee7-8e22-6899173fd157",
+      "name": "Supabase Vector Store",
+      "credentials": {
+        "supabaseApi": {
+          "id": "txLRP3lh3kM3FYgG",
+          "name": "Supabase - Prod"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsonMode": "expressionData",
+        "jsonData": "={{ $('Extract content').item.json.data }}",
+        "options": {
+          "metadata": {
+            "metadataValues": [
+              {
+                "name": "url",
+                "value": "={{ $('Current file').item.json.url }}"
+              },
+              {
+                "name": "file_name",
+                "value": "={{ $('Current file').item.json.name }}"
+              },
+              {
+                "name": "id",
+                "value": "={{ $('Current file').item.json.id }}"
+              },
+              {
+                "name": "agent",
+                "value": "empresanho_operacoes"
+              },
+              {
+                "name": "created_at",
+                "value": "={{ $('Current file').item.json.created_at }}"
+              },
+              {
+                "name": "updated_at",
+                "value": "={{ $('Current file').item.json.updated_at }}"
+              },
+              {
+                "name": "path",
+                "value": "={{ $('Current file').item.json.folder.path }}"
+              }
+            ]
+          }
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.documentDefaultDataLoader",
+      "typeVersion": 1.1,
+      "position": [
+        4544,
+        240
+      ],
+      "id": "8cc0e0cb-fcdd-459b-9402-05973409ae5e",
+      "name": "Default Data Loader"
+    },
+    {
+      "parameters": {
+        "model": "text-embedding-3-large",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.embeddingsOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        4416,
+        240
+      ],
+      "id": "2ebf574b-b69c-4c40-b320-efbca9ead7de",
+      "name": "text-embedding-3-large1",
+      "credentials": {
+        "openAiApi": {
+          "id": "59BK7XynVHdYOlH3",
+          "name": "OpenAI - Comercial - Prod"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "download",
+        "fileId": {
+          "__rl": true,
+          "value": "={{ $('Current file').item.json.id }}",
+          "mode": "id"
+        },
+        "options": {
+          "googleFileConversion": {
+            "conversion": {
+              "docsToFormat": "text/plain",
+              "slidesToFormat": "application/pdf"
+            }
+          }
+        }
+      },
+      "id": "d5b8fa6d-f651-4c3f-bcc3-d7e86d2f427b",
+      "name": "Get file",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        3952,
+        -112
+      ],
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 3000,
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "8q8VuCwcbTXRJ8px",
+          "name": "Google Drive - Bento"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "text",
+        "options": {}
+      },
+      "id": "e1107dfc-a867-40d0-9f07-2b41277111a8",
+      "name": "Extract content",
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1,
+      "position": [
+        4176,
+        -112
+      ]
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        2384,
+        -48
+      ],
+      "id": "dac8e23c-9aa9-461b-b86d-a6e6964c41ca",
+      "name": "Loop Over Items"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        2608,
+        -304
+      ],
+      "id": "bc469e2e-f939-4471-aac1-febaac761ff9",
+      "name": "Noop"
+    },
+    {
+      "parameters": {
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        2608,
+        -112
+      ],
+      "id": "828b60bf-8af9-469c-82cd-ccaec15f741d",
+      "name": "Current file"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "1f5a7a6b-420f-49bf-adf8-5360ffb58b95",
+              "leftValue": "={{ (new Date($('Current file').item.json.updated_at)).toDateTime() }}",
+              "rightValue": "={{ new Date($json.metadata.updated_at) }}",
+              "operator": {
+                "type": "dateTime",
+                "operation": "after"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        3280,
+        -192
+      ],
+      "id": "dea90cd3-bc81-4730-a61d-eca547fc8ea7",
+      "name": "Is file updated than the database?"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "330e4b9e-dfea-4fc3-beff-75c060cbf1d2",
+              "leftValue": "={{ $('Config').last().json.files_blacklist }}",
+              "rightValue": "={{ $json.name }}",
+              "operator": {
+                "type": "array",
+                "operation": "notContains",
+                "rightType": "any"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2.2,
+      "position": [
+        1936,
+        -48
+      ],
+      "id": "9d055278-b371-459e-ad79-06c8555b44b1",
+      "name": "Remove blocked files"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "55166ab3-7166-4404-b207-40af7202897e",
+              "leftValue": "={{ $('Config').last().json.allowed_mimetypes}}",
+              "rightValue": "={{ $json.mime_type }}",
+              "operator": {
+                "type": "array",
+                "operation": "contains",
+                "rightType": "any"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2.2,
+      "position": [
+        2160,
+        -48
+      ],
+      "id": "d20df02e-3c99-489f-97f5-eeaf570896b2",
+      "name": "Allow mimetypes"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "DELETE FROM documents WHERE id IN ({{ $json.id.join(',') }})",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        3728,
+        -192
+      ],
+      "id": "a3833cea-ac37-4faa-8fc4-0b9994c29b4d",
+      "name": "Delete embeddings",
+      "credentials": {
+        "postgres": {
+          "id": "aMXHBDGI2LrfF2Sb",
+          "name": "Supabase - Prod"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "fieldsToAggregate": {
+          "fieldToAggregate": [
+            {
+              "fieldToAggregate": "id"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.aggregate",
+      "typeVersion": 1,
+      "position": [
+        3504,
+        -192
+      ],
+      "id": "85b2482c-322e-41b1-b1dd-0cec350b11a6",
+      "name": "Aggregate"
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -304,
+        -16
+      ],
+      "id": "b0594ccd-11a1-480b-ab51-0b117d9289a1",
+      "name": "Schedule Trigger"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "When clicking ‘Execute workflow’": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set execution data": {
+      "main": [
+        [
+          {
+            "node": "Is there any folder to process?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process result": {
+      "main": [
+        [
+          {
+            "node": "Merge process results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare next iteration data": {
+      "main": [
+        [
+          {
+            "node": "Is there any folder to process?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is there any folder to process?": {
+      "main": [
+        [
+          {
+            "node": "Set folders to process",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Consolidate files",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set folders to process": {
+      "main": [
+        [
+          {
+            "node": "List folder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "List folder": {
+      "main": [
+        [
+          {
+            "node": "Process result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has more folders to process?": {
+      "main": [
+        [
+          {
+            "node": "Prepare next iteration data",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Consolidate files",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge process results": {
+      "main": [
+        [
+          {
+            "node": "Has more folders to process?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config": {
+      "main": [
+        [
+          {
+            "node": "Set execution data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find embedding": {
+      "main": [
+        [
+          {
+            "node": "New data?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "New data?": {
+      "main": [
+        [
+          {
+            "node": "Get file",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Is file updated than the database?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase Vector Store": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Default Data Loader": {
+      "ai_document": [
+        [
+          {
+            "node": "Supabase Vector Store",
+            "type": "ai_document",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "text-embedding-3-large1": {
+      "ai_embedding": [
+        [
+          {
+            "node": "Supabase Vector Store",
+            "type": "ai_embedding",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get file": {
+      "main": [
+        [
+          {
+            "node": "Extract content",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract content": {
+      "main": [
+        [
+          {
+            "node": "Supabase Vector Store",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over Items": {
+      "main": [
+        [
+          {
+            "node": "Noop",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Current file",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Consolidate files": {
+      "main": [
+        [
+          {
+            "node": "Remove blocked files",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Current file": {
+      "main": [
+        [
+          {
+            "node": "Find embedding",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is file updated than the database?": {
+      "main": [
+        [
+          {
+            "node": "Aggregate",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Remove blocked files": {
+      "main": [
+        [
+          {
+            "node": "Allow mimetypes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Allow mimetypes": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate": {
+      "main": [
+        [
+          {
+            "node": "Delete embeddings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Delete embeddings": {
+      "main": [
+        [
+          {
+            "node": "Get file",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "11f60bce-5ffc-4b5c-854f-41ba76e8009e",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "1e6099a26cdc3acc22742f0a46824703c7c6c4fc46e9bb4bfd98fe245bfd7b0a"
+  },
+  "id": "dB1expGJ44zKby2L",
+  "tags": []
+}
